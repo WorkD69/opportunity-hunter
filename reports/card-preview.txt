@@ -1,0 +1,39 @@
+#053f6167da6f4634a6fb80035a1e3f75 · Я — профессионал, X сезон
+Организатор: Я
+Категория: A — Стипендии, гранты и денежные конкурсы
+Вознаграждение: не опубликовано / не подтверждено (денежный приз)
+Дедлайн: 2026-11-10T20:59:59.999999Z
+Актуальность: активно
+Основные условия: full_rules_review = True
+Соответствие: требует уточнения
+• full_rules_review: user confirmation needed
+Трудозатраты на регистрацию (оценка агента): неизвестны
+Действия:
+• Проверить полное положение текущего сезона, выбрать направление; тесты проходить лично.
+Предложение: https://yandex.ru/profi/
+Условия: https://yandex.ru/profi/
+Проверено: 2026-10-17T15:51:07.947302Z
+/oh save 053f6167da6f4634a6fb80035a1e3f75 · /oh hide 053f6167da6f4634a6fb80035a1e3f75
+/oh details 053f6167da6f4634a6fb80035a1e3f75 · /oh recheck 053f6167da6f4634a6fb80035a1e3f75 · /oh instructions 053f6167da6f4634a6fb80035a1e3f75
+
+#c499643b70c14e0c99197855bdfe06da · Сириус — Анализ и защита данных в финтехе
+Организатор: Сириус
+Категория: D — Карьерные и образовательные программы
+Вознаграждение: не опубликовано / не подтверждено (карьерная возможность)
+Дедлайн: 2026-10-18T20:59:59.999999Z
+Актуальность: активно
+Основные условия: гражданство = RU; курс допустимо [3, 4]; возраст от 18; очная форма = True; prior_funded_sirius_2026 = False
+Соответствие: требует уточнения
+• citizenship: user confirmation needed
+• age: user confirmation needed
+• full_time: user confirmation needed
+• prior_funded_sirius_2026: user confirmation needed
+Трудозатраты на регистрацию (оценка агента): неизвестны
+Действия:
+• Уточнить гражданство, возраст, очную форму и прошлое участие. Проезд самостоятельно.
+• Сверить очные даты с учёбой и лично пройти вступительные испытания.
+Предложение: https://siriusuniversity.ru/admission/educational-modules-and-activities/scientific-center-for-information-technologies-and-artificial-intelligence/analiz-i-zashchita-dannykh-v-fintekhe/
+Условия: https://siriusuniversity.ru/admission/educational-modules-and-activities/scientific-center-for-information-technologies-and-artificial-intelligence/analiz-i-zashchita-dannykh-v-fintekhe/
+Проверено: 2026-10-17T15:51:08.067284Z
+/oh save c499643b70c14e0c99197855bdfe06da · /oh hide c499643b70c14e0c99197855bdfe06da
+/oh details c499643b70c14e0c99197855bdfe06da · /oh recheck c499643b70c14e0c99197855bdfe06da · /oh instructions c499643b70c14e0c99197855bdfe06da

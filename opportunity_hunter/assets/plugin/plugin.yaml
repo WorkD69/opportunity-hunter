@@ -1,0 +1,8 @@
+name: opportunity-hunter
+version: 0.1.0
+description: Evidence-based personal opportunity discovery and SQLite ledger
+author: Artem
+kind: standalone
+requires_hermes: ">=0.21.6"
+provides_tools:
+  - opportunity_hunter

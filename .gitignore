@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.db
+*.db-*
+runtime/
+build/
+*.secret
+
+# Raw live-test evidence stays local (public repository)
+reports/*.log
+reports/*.json
+reports/*.jsonl
+
+# Local plans and scratch files contain personal data
+tmp/

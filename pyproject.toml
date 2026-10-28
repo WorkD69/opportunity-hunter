@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opportunity-hunter"
+version = "0.1.0"
+description = "Profile-scoped Hermes opportunity research and evidence ledger"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+opportunity-hunter = "opportunity_hunter.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["opportunity_hunter*"]
+
+[tool.setuptools.package-data]
+opportunity_hunter = ["assets/**/*", "assets/.env.example", "assets/config.yaml", "assets/*.md", "assets/*.py"]

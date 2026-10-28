@@ -1,0 +1,55 @@
+timezone: Europe/Moscow
+model:
+  provider: openai-codex
+  default: gpt-6-luna
+  base_url: https://chatgpt.com/backend-api/codex
+  api_mode: codex_responses
+auth:
+  adopt_external_logins: false
+unauthorized_dm_behavior: ignore
+approvals:
+  mode: manual
+  cron_mode: deny
+  unattended_mode: deny
+  single_query_mode: deny
+security:
+  allow_lazy_installs: false
+plugins:
+  enabled: [opportunity-hunter]
+memory:
+  memory_enabled: true
+  user_profile_enabled: false
+  write_approval: true
+skills:
+  write_approval: true
+  guard_agent_created: true
+curator:
+  enabled: false
+  consolidate: false
+web:
+  search_backend: exa
+  extract_backend: exa
+  provider_tier:
+    exa: free
+agent:
+  reasoning_effort: low
+  disabled_toolsets: [terminal, file, code_execution, computer_use, delegation, connections, browser, image_gen, vision, tts]
+platform_toolsets:
+  telegram: [clarify, memory, session_search, skills, todo, web, opportunity_hunter]
+  cli: [clarify, memory, session_search, skills, todo, web, opportunity_hunter]
+  cron: [skills, web, opportunity_hunter]
+cron:
+  model: gpt-6-luna
+  allow_agent_scheduling: false
+terminal:
+  home_mode: profile
+  env_passthrough: []
+mcp_servers: {}
+auxiliary:
+  background_review:
+    enabled: false
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false
+    offer_version: 2
