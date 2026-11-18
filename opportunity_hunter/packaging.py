@@ -55,7 +55,7 @@ def cron_spec():
                                'successful interpretation. Notify new then urgent via the opportunity tool. '
                                'No direct Telegram send, no applications. If partial, preserve errors in health. '
                                'The final result is stored locally; remain quiet if no useful new results.'})
-    jobs.append({'name': 'oh-daily', 'schedule': '0 21 * * *', 'deliver': 'local',
+    jobs.append({'name': 'oh-daily', 'schedule': '0 22 * * *', 'deliver': 'local',
                  'skills': ['opportunity-hunter'], 'enabled_toolsets': ['skills', 'opportunity_hunter'],
                  'prompt': 'Load opportunity-hunter skill. Call notify kind=digest, then kind=urgent. '
                            'Only the opportunity tool delivers. If no new/changed opportunities, stay silent.'})
