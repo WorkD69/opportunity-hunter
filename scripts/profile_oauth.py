@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sys
+from types import SimpleNamespace
 
 HOME=Path('/opt/data/profiles/opportunity-hunter')
 
@@ -34,6 +35,10 @@ class PublicOutput:
 
 def main():
     requested_check='--check' in sys.argv
+    # --replace-invalid: the owner confirmed the saved session is dead (auth refresh failed);
+    # old rows are removed only AFTER a new login is saved and verified.
+    replace_invalid='--replace-invalid' in sys.argv
+    expected_bot=sys.argv[sys.argv.index('--bot-username')+1] if '--bot-username' in sys.argv[:-1] else ''
     os.environ.clear()
     os.environ.update({'HOME':str(HOME/'home'),'HERMES_HOME':str(HOME),
         'PATH':'/opt/hermes/.venv/bin:/usr/local/bin:/usr/bin:/bin','USER':'hermes',
@@ -52,12 +57,13 @@ def main():
         return 1
     try:
         # No OAuth starts until Telegram token, owner and read-back all pass.
-        telegram.configure(home=HOME,check_only=True)
+        telegram.configure(home=HOME,check_only=True,expected_bot=expected_bot)
     except Exception:
         return stop('TELEGRAM_NOT_READY')
     if (HOME/'auth.json').is_symlink():return stop('UNSAFE_AUTH_PATH')
     state=json.loads((HOME/'auth.json').read_text()) if (HOME/'auth.json').exists() else {}
-    if state.get('credential_pool',{}).get('openai-codex') or state.get('providers',{}).get('openai-codex'):
+    old_ids={r.get('id') for r in state.get('credential_pool',{}).get('openai-codex') or [] if r.get('id')}
+    if (old_ids or state.get('providers',{}).get('openai-codex')) and not replace_invalid:
         return stop('OWN_AUTH_ALREADY_EXISTS_VERIFY_INSTEAD')
 
     def guard(event,args):
@@ -75,8 +81,9 @@ def main():
         print(json.dumps({'ok':True,'stage':'oauth','code':'PREFLIGHT_OK','login_started':False}),flush=True)
         return 0
     event('NATIVE_LOGIN_STARTED')
+    label='opportunity-hunter' if not old_ids else 'opportunity-hunter-relogin'
     sys.argv=['hermes','-p','opportunity-hunter','auth','add','openai-codex',
-              '--label','opportunity-hunter','--no-browser']
+              '--label',label,'--no-browser']
     code=0
     try:
         with contextlib.redirect_stdout(PublicOutput(sys.stdout)),contextlib.redirect_stderr(io.StringIO()):
@@ -91,8 +98,21 @@ def main():
     if code!=0:return stop('NATIVE_LOGIN_FAILED')
     state=json.loads((HOME/'auth.json').read_text()) if (HOME/'auth.json').is_file() else {}
     rows=state.get('credential_pool',{}).get('openai-codex') or []
-    if not rows or not any(r.get('access_token') and r.get('refresh_token') for r in rows):
+    if not any(r.get('access_token') and r.get('refresh_token') and r.get('id') not in old_ids for r in rows):
         return stop('OWN_AUTH_READBACK_FAILED')
+    if old_ids:
+        from hermes_cli.auth_commands import auth_remove_command
+        try:
+            with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+                for old_id in sorted(old_ids):
+                    auth_remove_command(SimpleNamespace(provider='openai-codex',target=old_id,index=None))
+        except BaseException:
+            return stop('NEW_AUTH_SAVED_OLD_REMOVAL_FAILED')
+        state=json.loads((HOME/'auth.json').read_text())
+        left={r.get('id') for r in state.get('credential_pool',{}).get('openai-codex') or []}
+        if left & old_ids or not left:
+            return stop('NEW_AUTH_SAVED_OLD_REMOVAL_FAILED')
+        event('INVALID_AUTH_REPLACED')
     (HOME/'auth.json').chmod(0o600)
     event('OWN_AUTH_SAVED_VERIFIED')
     print(json.dumps({'ok':True,'stage':'oauth','code':'OWN_AUTH_SAVED_VERIFIED','own_auth_file':True}),flush=True)

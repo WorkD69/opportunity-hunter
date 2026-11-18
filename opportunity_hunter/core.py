@@ -36,7 +36,20 @@ PROFILE_SEED = {
     'relocation': None, 'team_available': None, 'kyc_willingness': None,
     'skills': None, 'quant_experience': None, 'work_experience': None,
     'commercial_experience': None, 'interests': None,
+    'city': None, 'min_salary': None, 'available_from': None,
 }
+# Spelling variants of the same city compare equal (ё/е, transliteration, short forms).
+CITY_ALIASES = {
+    'нижний новгород': 'nizhny novgorod', 'н. новгород': 'nizhny novgorod', 'nizhniy novgorod': 'nizhny novgorod',
+    'nizhni novgorod': 'nizhny novgorod', 'москва': 'moscow', 'санкт-петербург': 'saint petersburg',
+    'спб': 'saint petersburg', 'питер': 'saint petersburg', 'st. petersburg': 'saint petersburg',
+    'st petersburg': 'saint petersburg', 'petersburg': 'saint petersburg',
+}
+RESUME_SECTIONS = ('education', 'projects', 'achievements', 'skills', 'languages', 'experience', 'pinned_rules')
+RESUME_SEED = {'basics': {key: None for key in ('name', 'email', 'phone', 'telegram', 'github', 'linkedin',
+                                                'city', 'headline')},
+               **{section: [] for section in RESUME_SECTIONS}}
+CONTACT_FIELDS = ('name', 'email', 'phone', 'telegram', 'linkedin')
 QUERY_TEMPLATES = {
     'A': [
         'именная стипендия студенты бакалавриат информатика конкурс {year}',
@@ -110,7 +123,7 @@ def _hash(value):
 
 def _meaningful_content(item):
     fields = {'category', 'title', 'organizer', 'round', 'reward',
-              'deadline', 'status', 'cost_flags', 'next_actions'}
+              'deadline', 'status', 'cost_flags', 'next_actions', 'location'}
     content = {key: value for key, value in item.items() if key in fields}
     # Evidence wording and citation aliases remain in stored data for review,
     # while versioning follows the actual criteria rather than their phrasing.
@@ -194,6 +207,37 @@ def _cost_supported(item, key):
         if re.search(r'(?:' + terms[key] + r')[^.,;]{0,30}(?:not required|not charged|не треб\w*|не взима\w*|отсутств\w*)', quote):
             return True
     return False
+
+
+def normalize_city(value):
+    if not isinstance(value, str):
+        return ''
+    city = ' '.join(value.casefold().replace('ё', 'е').replace('г.', ' ').split())
+    return CITY_ALIASES.get(city, city)
+
+
+def _location_verdict(item, profile):
+    """City is the owner's only hard filter: other city -> remote, or paid relocation/housing (🏠).
+
+    Returns (mismatch, uncertain, reasons, flags). No location data -> no opinion (online
+    scholarships and contests are city-agnostic)."""
+    home = normalize_city(profile.get('city'))
+    location = item.get('location') or {}
+    cities = [normalize_city(c) for c in location.get('cities') or []]
+    if not home or not cities or home in cities:
+        return False, False, [], []
+    # Hybrid in another city still requires presence there, so it does not count as remote.
+    if location.get('remote') is True and location.get('hybrid') is not True:
+        return False, False, ['Другой город, но работа удалённая'], ['remote']
+    relocation = location.get('relocation_support') is True and any(
+        evidence.get('field') == 'location.relocation_support'
+        and _official_evidence(evidence.get('url'), evidence.get('quote'), item.get('official_url'))
+        for evidence in item.get('evidence', []))
+    if relocation:
+        return False, False, ['Другой город, но компания оплачивает переезд или жильё'], ['relocation_support']
+    if location.get('remote') is False or location.get('hybrid') is True:
+        return True, False, ['Другой город, без удалённого формата'], ['other_city']
+    return False, True, ['Другой город: удалённый формат или помощь с переездом не подтверждены'], []
 
 
 def evaluate(item, profile, today=None):
@@ -284,6 +328,11 @@ def evaluate(item, profile, today=None):
     if status == 'unknown':
         uncertain = True
         reasons.append('Application availability is unverified')
+    location_mismatch, location_uncertain, location_reasons, location_flags = _location_verdict(item, profile)
+    mismatch = mismatch or location_mismatch
+    uncertain = uncertain or location_uncertain
+    reasons.extend(location_reasons)
+    flags.extend(location_flags)
     eligibility = 'ineligible' if mismatch else 'needs_clarification' if uncertain else 'eligible'
     rank = (50 if eligibility == 'eligible' else 20 if eligibility == 'needs_clarification' else 0)
     rank += 20 if supported else 0
@@ -305,6 +354,170 @@ def evaluate(item, profile, today=None):
             'free_status': free_status, 'flags': flags}
 
 
+
+# ── Master profile, layer 2: resume content ─────────────────────────────────────────────────────
+# Every fact carries id/source/confirmed. Only confirmed facts may reach a generated resume
+# (stage 3). Years are integers: RenderCV turns the string '2025' into an invented month.
+_ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
+_COMMON = {'id': 'id', 'source': 'str?', 'confirmed': 'bool', 'confirmed_note': 'str?', 'open_questions': 'list'}
+RESUME_SCHEMA = {
+    'education': {'institution': 'str', 'degree': 'str?', 'area': 'str?', 'start_year': 'year?',
+                  'end_year': 'year?', 'gpa': 'scalar?', 'notes': 'list'},
+    'projects': {'name': 'str', 'url': 'url?', 'role': 'str?', 'team': 'bool?', 'start_year': 'year?',
+                 'end_year': 'year?', 'result': 'str?', 'stack': 'list', 'summary_ru': 'str?',
+                 'summary_en': 'str?', 'highlights_ru': 'list', 'highlights_en': 'list', 'do_not_link': 'bool?'},
+    'achievements': {'title': 'str', 'year': 'year?'},
+    'skills': {'name': 'str', 'level': 'str?', 'evidence': 'list'},
+    'languages': {'language': 'str', 'level': 'str?'},
+    'experience': {'company': 'str', 'position': 'str?', 'location': 'str?', 'start_year': 'year?',
+                   'end_year': 'year?', 'highlights_ru': 'list', 'highlights_en': 'list'},
+    'pinned_rules': {'text': 'str', 'applies_to': 'str?'},
+}
+RESUME_OPS = ('add', 'replace', 'remove', 'confirm', 'set_basics')
+# Contacts never come from model proposals; they arrive only through the owner's private import.
+PROPOSABLE_BASICS = ('github', 'city', 'headline')
+
+
+def _check_value(kind, value, where):
+    optional = kind.endswith('?')
+    kind = kind.rstrip('?')
+    if value is None:
+        if optional or kind == 'list':
+            return [] if kind == 'list' else None
+        raise ValueError(where + ' is required')
+    if kind == 'id':
+        if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+            raise ValueError(where + ': id must be lowercase letters, digits and hyphens')
+    elif kind == 'str':
+        if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+            raise ValueError(where + ': nonempty string up to 2000 characters required')
+        value = value.strip()
+    elif kind == 'url':
+        if not isinstance(value, str) or not value.startswith('https://') or len(value) > 500:
+            raise ValueError(where + ': https URL required')
+    elif kind == 'year':
+        if type(value) is not int or not 1990 <= value <= 2100:
+            raise ValueError(where + ': year must be an integer 1990–2100, not a string')
+    elif kind == 'bool':
+        if type(value) is not bool:
+            raise ValueError(where + ': boolean required')
+    elif kind == 'scalar':
+        if not ((type(value) in (int, float) and math.isfinite(value)) or (isinstance(value, str) and len(value) <= 50)):
+            raise ValueError(where + ': short number or string required')
+    elif kind == 'list':
+        if (not isinstance(value, list) or len(value) > 50
+                or not all(isinstance(v, str) and v.strip() and len(v) <= 500 for v in value)):
+            raise ValueError(where + ': list of up to 50 short strings required')
+        value = [v.strip() for v in value]
+    return value
+
+
+def _validate_resume_entry(section, entry):
+    if section not in RESUME_SCHEMA:
+        raise ValueError('Unknown resume section: ' + str(section))
+    if not isinstance(entry, dict):
+        raise ValueError(section + ': entry must be an object')
+    entry = {'confirmed': False, **entry}
+    schema = {**_COMMON, **RESUME_SCHEMA[section]}
+    unknown = set(entry) - set(schema)
+    if unknown:
+        raise ValueError(section + ': unknown fields ' + ', '.join(sorted(unknown)))
+    result = {key: _check_value(kind, entry.get(key), f'{section}.{entry.get("id", "?")}.{key}')
+              for key, kind in schema.items() if key in entry or not kind.endswith('?')}
+    return result
+
+
+def validate_resume(data):
+    """Normalize a complete resume_profile document or raise ValueError."""
+    if not isinstance(data, dict) or set(data) - {'basics', *RESUME_SECTIONS}:
+        raise ValueError('Resume profile accepts only basics and the known sections')
+    basics = data.get('basics') or {}
+    if not isinstance(basics, dict) or set(basics) - set(RESUME_SEED['basics']):
+        raise ValueError('Unknown basics field')
+    result = {'basics': {key: _check_value('str?', basics.get(key), 'basics.' + key) if basics.get(key) is not None
+                         else None for key in RESUME_SEED['basics']}}
+    for section in RESUME_SECTIONS:
+        entries = data.get(section) or []
+        if not isinstance(entries, list) or len(entries) > 60:
+            raise ValueError(section + ' must be a list of up to 60 entries')
+        result[section] = [_validate_resume_entry(section, entry) for entry in entries]
+        ids = [entry['id'] for entry in result[section]]
+        if len(ids) != len(set(ids)):
+            raise ValueError(section + ': duplicate ids')
+    evidence_targets = {entry['id'] for section in ('projects', 'experience') for entry in result[section]}
+    for skill in result['skills']:
+        missing = [ref for ref in skill.get('evidence', []) if ref not in evidence_targets]
+        if missing:
+            raise ValueError(f"skills.{skill['id']}: evidence refers to unknown project/experience {missing}")
+    return result
+
+
+def apply_resume_ops(data, ops, *, owner_confirmed=False):
+    """Apply proposal operations to a copy; with owner_confirmed, every added/replaced fact is confirmed."""
+    if not isinstance(ops, list) or not 1 <= len(ops) <= 50:
+        raise ValueError('Resume proposal needs 1–50 operations')
+    result = json.loads(_json(data))
+    for op in ops:
+        if not isinstance(op, dict) or op.get('op') not in RESUME_OPS:
+            raise ValueError('Unknown resume operation')
+        kind = op['op']
+        if kind == 'set_basics':
+            if set(op) - {'op', 'field', 'value'} or op.get('field') not in PROPOSABLE_BASICS:
+                raise ValueError('Only github, city and headline can be proposed; contacts come from the private import')
+            kind_check = 'url?' if op['field'] == 'github' else 'str?'
+            result['basics'][op['field']] = _check_value(kind_check, op.get('value'), 'basics.' + op['field'])
+            continue
+        section = op.get('section')
+        if section not in RESUME_SECTIONS:
+            raise ValueError('Unknown resume section: ' + str(section))
+        entries = result[section]
+        if kind in ('add', 'replace'):
+            if set(op) - {'op', 'section', 'item'}:
+                raise ValueError('add/replace take only section and item')
+            if not isinstance(op.get('item'), dict):
+                raise ValueError('add/replace need an item object')
+            item = dict(op['item'])
+            if owner_confirmed:
+                item['confirmed'] = True
+            item = _validate_resume_entry(section, item)
+            index = next((i for i, e in enumerate(entries) if e['id'] == item['id']), None)
+            if kind == 'add' and index is not None:
+                raise ValueError(f"{section}.{item['id']} already exists; use replace")
+            if kind == 'replace' and index is None:
+                raise ValueError(f"{section}.{item['id']} does not exist; use add")
+            if index is None:
+                entries.append(item)
+            else:
+                entries[index] = item
+        else:
+            if set(op) - {'op', 'section', 'id'}:
+                raise ValueError('remove/confirm take only section and id')
+            index = next((i for i, e in enumerate(entries) if e['id'] == op.get('id')), None)
+            if index is None:
+                raise ValueError(f"{section}.{op.get('id')} does not exist")
+            if kind == 'remove':
+                entries.pop(index)
+            else:
+                entries[index]['confirmed'] = True
+    return validate_resume(result)
+
+
+def resume_entry_digest(entry):
+    """Short content hash of a resume entry (without its confirmed flag): a confirmation button
+    carries it, so the owner confirms exactly the version he was shown."""
+    content = {key: value for key, value in entry.items() if key != 'confirmed'}
+    return hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:6]
+
+
+def redact_resume(data):
+    """Model-facing view: contact values are never shown, only whether they are on file."""
+    view = json.loads(_json(data))
+    for key in CONTACT_FIELDS:
+        if view['basics'].get(key):
+            view['basics'][key] = '[скрыто]'
+    return view
+
+
 class Store:
     """Persistent store. Every operation opens a short-lived SQLite connection."""
 
@@ -317,6 +530,7 @@ class Store:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS profile_proposals(token TEXT PRIMARY KEY, patch TEXT NOT NULL, base_version INTEGER NOT NULL, expires_at TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS resume_profile(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, data TEXT NOT NULL, fingerprint TEXT NOT NULL, version INTEGER NOT NULL, bookmarked INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS aliases(alias TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(id));
                 CREATE TABLE IF NOT EXISTS history(item_id TEXT NOT NULL, version INTEGER NOT NULL, data TEXT NOT NULL, changed_at TEXT NOT NULL, PRIMARY KEY(item_id,version));
@@ -328,6 +542,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY, item_id TEXT NOT NULL, kind TEXT NOT NULL, content_hash TEXT NOT NULL, state TEXT NOT NULL, message_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(item_id,kind,content_hash));
             ''')
             db.execute('INSERT OR IGNORE INTO profile VALUES(1,1,?)', (_json(PROFILE_SEED),))
+            db.execute('INSERT OR IGNORE INTO resume_profile VALUES(1,1,?)', (_json(RESUME_SEED),))
+            proposal_columns = {row['name'] for row in db.execute('PRAGMA table_info(profile_proposals)')}
+            if 'scope' not in proposal_columns:
+                db.execute("ALTER TABLE profile_proposals ADD COLUMN scope TEXT NOT NULL DEFAULT 'criteria'")
             db.executemany('INSERT OR IGNORE INTO preferences(category,interval_hours) VALUES(?,?)', list(DEFAULT_INTERVALS.items()))
             existing_columns = {row['name'] for row in db.execute('PRAGMA table_info(source_categories)')}
             for column in ('checked_at', 'error', 'content_hash'):
@@ -360,14 +578,17 @@ class Store:
         return category
 
     def profile(self):
+        # Merge onto the current seed so databases created before new fields existed stay valid.
         with self._db() as db:
             row = db.execute('SELECT version,data FROM profile WHERE id=1').fetchone()
-            return {**json.loads(row['data']), 'version': row['version']}
+            return {**PROFILE_SEED, **json.loads(row['data']), 'version': row['version']}
 
-    def propose_profile(self, patch):
+    @staticmethod
+    def _validate_profile_patch(patch):
         if not isinstance(patch, dict) or not patch:
             raise ValueError('Profile patch must be a nonempty object')
-        numeric = {'year', 'study_start', 'study_end', 'age', 'gpa', 'income', 'quant_experience', 'work_experience', 'commercial_experience', 'weekly_hours'}
+        numeric = {'year', 'study_start', 'study_end', 'age', 'gpa', 'income', 'quant_experience', 'work_experience',
+                   'commercial_experience', 'weekly_hours', 'min_salary'}
         boolean = {'full_time', 'relocation', 'team_available', 'kyc_willingness'}
         list_fields = {'languages', 'skills', 'interests'}
         for field, value in patch.items():
@@ -392,32 +613,173 @@ class Store:
             elif field in list_fields:
                 if not isinstance(value, list) or not all(isinstance(v, str) and len(v) <= 500 for v in value) or len(value) > 100:
                     raise ValueError('List of short strings required: ' + field)
+            elif field == 'available_from':
+                try:
+                    date.fromisoformat(value)
+                except (TypeError, ValueError):
+                    raise ValueError('available_from must be a YYYY-MM-DD date') from None
             elif not isinstance(value, str) or len(value) > 1000:
                 raise ValueError('String required: ' + field)
+
+    MAX_PENDING_PROPOSALS = 3
+
+    @staticmethod
+    def _live_proposals(db):
+        """Unused, unexpired proposals whose base version is still current (any version bump —
+        confirmation, import, a confirmed fact — makes older proposals of that layer stale)."""
+        versions = {'criteria': db.execute('SELECT version FROM profile WHERE id=1').fetchone()[0],
+                    'resume': db.execute('SELECT version FROM resume_profile WHERE id=1').fetchone()[0]}
+        rows = db.execute('SELECT * FROM profile_proposals WHERE used=0 AND expires_at>? ORDER BY expires_at',
+                          (_iso(_now()),)).fetchall()
+        return [row for row in rows if row['base_version'] == versions.get(row['scope'])]
+
+    def _propose(self, scope, patch, base_version):
         token = secrets.token_urlsafe(32)
         with self._db(write=True) as db:
-            version = db.execute('SELECT version FROM profile WHERE id=1').fetchone()['version']
-            db.execute('INSERT INTO profile_proposals(token,patch,base_version,expires_at) VALUES(?,?,?,?)',
-                       (token, _json(patch), version, _iso(_now() + timedelta(minutes=30))))
-        return {'token': token, 'patch': patch, 'base_version': version}
+            pending = len(self._live_proposals(db))
+            if pending >= self.MAX_PENDING_PROPOSALS:
+                raise ValueError('Too many pending profile proposals; the owner must confirm or cancel them first')
+            db.execute('INSERT INTO profile_proposals(token,patch,base_version,expires_at,scope) VALUES(?,?,?,?,?)',
+                       (token, _json(patch), base_version, _iso(_now() + timedelta(minutes=30)), scope))
+        return {'token': token, 'scope': scope, 'patch': patch, 'base_version': base_version}
+
+    def propose_profile(self, patch):
+        self._validate_profile_patch(patch)
+        return self._propose('criteria', patch, self.profile()['version'])
+
+    def resume_profile(self, redact=True):
+        with self._db() as db:
+            row = db.execute('SELECT version,data FROM resume_profile WHERE id=1').fetchone()
+        data = validate_resume(json.loads(row['data']))
+        return {**(redact_resume(data) if redact else data), 'version': row['version']}
+
+    def propose_resume(self, ops):
+        if not isinstance(ops, list) or not 1 <= len(ops) <= 10:
+            raise ValueError('A resume proposal takes 1–10 operations so the owner can review it')
+        current = self.resume_profile(redact=False)
+        version = current.pop('version')
+        apply_resume_ops(current, ops, owner_confirmed=True)  # dry run: reject invalid proposals early
+        return self._propose('resume', ops, version)
 
     def confirm_profile(self, token):
+        """Owner-only (trusted adapters): apply one unexpired, unused proposal of either layer."""
         with self._db(write=True) as db:
             proposal = db.execute('SELECT * FROM profile_proposals WHERE token=?', (token,)).fetchone()
-            current = db.execute('SELECT * FROM profile WHERE id=1').fetchone()
-            if not proposal or proposal['used'] or _datetime(proposal['expires_at']) <= _now() or proposal['base_version'] != current['version']:
+            if not proposal or proposal['used'] or _datetime(proposal['expires_at']) <= _now():
                 raise ValueError('Profile proposal is expired, already used, or stale')
-            data = json.loads(current['data'])
-            data.update(json.loads(proposal['patch']))
+            table = 'resume_profile' if proposal['scope'] == 'resume' else 'profile'
+            current = db.execute(f'SELECT * FROM {table} WHERE id=1').fetchone()
+            if proposal['base_version'] != current['version']:
+                raise ValueError('Profile proposal is expired, already used, or stale')
+            if proposal['scope'] == 'resume':
+                data = apply_resume_ops(validate_resume(json.loads(current['data'])), json.loads(proposal['patch']),
+                                        owner_confirmed=True)
+            else:
+                data = {**PROFILE_SEED, **json.loads(current['data']), **json.loads(proposal['patch'])}
             version = current['version'] + 1
-            db.execute('UPDATE profile SET version=?,data=? WHERE id=1', (version, _json(data)))
+            db.execute(f'UPDATE {table} SET version=?,data=? WHERE id=1', (version, _json(data)))
             db.execute('UPDATE profile_proposals SET used=1 WHERE token=?', (token,))
-        return {**data, 'version': version}
+        result = redact_resume(data) if proposal['scope'] == 'resume' else data
+        return {**result, 'version': version, 'scope': proposal['scope']}
+
+    def proposal(self, token):
+        """Pending proposal for display (scope + patch), or None when used/expired/unknown."""
+        row = next((r for r in self._live_rows() if r['token'] == token), None)
+        if row is None:
+            return None
+        return {'token': token, 'scope': row['scope'], 'patch': json.loads(row['patch'])}
+
+    def _live_rows(self):
+        with self._db() as db:
+            return self._live_proposals(db)
+
+    def pending_proposals(self):
+        return [{'token': r['token'], 'scope': r['scope'], 'patch': json.loads(r['patch'])} for r in self._live_rows()]
+
+    def cancel_proposal(self, token):
+        with self._db(write=True) as db:
+            return db.execute('UPDATE profile_proposals SET used=1 WHERE token=? AND used=0', (token,)).rowcount == 1
+
+    def confirm_resume_entry(self, section, entry_id, digest):
+        """Owner-only (button press after seeing the whole entry): mark one stored fact confirmed.
+
+        Never exposed as a model action. `digest` must match the entry's current content (checked in
+        the same transaction), otherwise ValueError. Returns False when it was already confirmed."""
+        if section not in RESUME_SECTIONS:
+            raise ValueError('Unknown resume section: ' + str(section))
+        with self._db(write=True) as db:
+            row = db.execute('SELECT version,data FROM resume_profile WHERE id=1').fetchone()
+            data = validate_resume(json.loads(row['data']))
+            entry = next((e for e in data[section] if e['id'] == entry_id), None)
+            if entry is None:
+                raise KeyError('Resume entry not found')
+            if resume_entry_digest(entry) != digest:
+                raise ValueError('Resume entry changed since it was shown')
+            if entry.get('confirmed'):
+                return False
+            data = apply_resume_ops(data, [{'op': 'confirm', 'section': section, 'id': entry_id}])
+            db.execute('UPDATE resume_profile SET version=?,data=? WHERE id=1', (row['version'] + 1, _json(data)))
+        return True
+
+    def profile_missing(self):
+        """What the bot should still ask about: empty criteria and facts not yet confirmed."""
+        profile = self.profile()
+        resume = self.resume_profile(redact=False)
+        unconfirmed = [{'section': section, 'id': entry['id'],
+                        'label': entry.get('name') or entry.get('title') or entry.get('institution')
+                        or entry.get('language') or entry.get('company') or entry.get('text'),
+                        'open_questions': entry.get('open_questions', [])}
+                       for section in RESUME_SECTIONS for entry in resume[section] if not entry.get('confirmed')]
+        return {'criteria_unknown': [key for key in PROFILE_SEED if profile.get(key) in (None, [], '')],
+                'resume_unconfirmed': unconfirmed,
+                'contacts_on_file': [key for key in CONTACT_FIELDS if resume['basics'].get(key)]}
+
+    def import_master(self, master, apply=False):
+        """Trusted operator import of the owner-reviewed private profile (never exposed to the model).
+
+        Dry run by default: returns what would change. Idempotent: the same file twice changes nothing."""
+        if not isinstance(master, dict):
+            raise ValueError('Master profile must be an object')
+        criteria = {key: value for key, value in (master.get('criteria') or {}).items() if key in PROFILE_SEED}
+        if criteria:
+            self._validate_profile_patch(criteria)
+        resume = validate_resume(master['resume_profile']) if master.get('resume_profile') is not None else None
+        sources = master.get('extra_sources') or []
+        if not isinstance(sources, list) or len(sources) > 50:
+            raise ValueError('extra_sources must be a short list')
+        profile = self.profile()
+        current_resume = self.resume_profile(redact=False)
+        criteria_changes = sorted(key for key, value in criteria.items() if profile.get(key) != value)
+        resume_changed = resume is not None and resume != {k: v for k, v in current_resume.items() if k != 'version'}
+        for source in sources:
+            if not isinstance(source, dict) or source.get('category') not in CATEGORIES:
+                raise ValueError('Every extra source needs a category A–D')
+            canonical_url(source.get('url'))
+        known = {source['url'] for source in self.sources()}
+        new_sources = [source for source in sources if canonical_url(source.get('url')) not in known]
+        summary = {'apply': bool(apply), 'criteria_changes': criteria_changes, 'resume_changed': resume_changed,
+                   'resume_counts': {s: len(resume[s]) for s in RESUME_SECTIONS} if resume else None,
+                   'resume_confirmed': sum(e.get('confirmed', False) for s in RESUME_SECTIONS for e in resume[s]) if resume else None,
+                   'sources_new': len(new_sources)}
+        if not apply:
+            return summary
+        with self._db(write=True) as db:
+            if criteria_changes:
+                row = db.execute('SELECT version,data FROM profile WHERE id=1').fetchone()
+                db.execute('UPDATE profile SET version=?,data=? WHERE id=1',
+                           (row['version'] + 1, _json({**PROFILE_SEED, **json.loads(row['data']), **criteria})))
+            if resume_changed:
+                row = db.execute('SELECT version FROM resume_profile WHERE id=1').fetchone()
+                db.execute('UPDATE resume_profile SET version=?,data=? WHERE id=1', (row['version'] + 1, _json(resume)))
+        for source in new_sources:
+            self.add_source({'url': source['url'], 'category': source['category'],
+                             'title': source.get('title', ''), 'trust': source.get('label', 'unknown')})
+        return summary
 
     def _validate_item(self, raw):
         if not isinstance(raw, dict):
             raise ValueError('Item must be an object')
-        fields = {'category', 'title', 'organizer', 'url', 'official_url', 'identity_url', 'round', 'external_id', 'reward', 'deadline', 'verified_at', 'status', 'requirements', 'evidence', 'cost_flags', 'next_actions', 'assessment'}
+        fields = {'category', 'title', 'organizer', 'url', 'official_url', 'identity_url', 'round', 'external_id', 'reward', 'deadline', 'verified_at', 'status', 'requirements', 'evidence', 'cost_flags', 'next_actions', 'assessment', 'location'}
         data = {k: v for k, v in raw.items() if k in fields}
         self._category(data.get('category'))
         for field in ('title', 'organizer'):
@@ -488,6 +850,18 @@ class Store:
         data.setdefault('next_actions', [])
         if not isinstance(data['next_actions'], list) or not all(isinstance(v, str) for v in data['next_actions']):
             raise ValueError('Next actions must be strings')
+        location = data.get('location')
+        if location is not None:
+            if not isinstance(location, dict) or set(location) - {'cities', 'remote', 'hybrid', 'relocation_support'}:
+                raise ValueError('Location accepts only cities, remote, hybrid and relocation_support')
+            cities = location.get('cities') or []
+            if (not isinstance(cities, list) or len(cities) > 30
+                    or not all(isinstance(c, str) and c.strip() and len(c) <= 100 for c in cities)):
+                raise ValueError('Location cities must be a short list of city names')
+            if any(location.get(k) not in (True, False, None) for k in ('remote', 'hybrid', 'relocation_support')):
+                raise ValueError('Location flags must be true, false or null')
+            data['location'] = {'cities': [c.strip() for c in cities],
+                                **{k: location.get(k) for k in ('remote', 'hybrid', 'relocation_support')}}
         _json(data)
         return data
 
@@ -587,6 +961,13 @@ class Store:
             result.append(data)
         result.sort(key=lambda item: item['evaluation']['rank'], reverse=True)
         return result[:limit]
+
+    def rejected(self, limit=30):
+        """Filtered-out offers with their reasons, so the owner can catch filter mistakes."""
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError('Limit must be 1..1000')
+        items = self.list(limit=1000, include_hidden=True)
+        return [item for item in items if item['evaluation']['eligibility'] == 'ineligible'][:limit]
 
     def action(self, item_id, action):
         changes = {'save': ('bookmarked', 1), 'unsave': ('bookmarked', 0), 'hide': ('hidden', 1), 'unhide': ('hidden', 0)}

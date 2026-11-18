@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import buttons
 from .core import Store
 from .research import ResearchEngine
 
@@ -49,9 +50,7 @@ def format_card(item):
               f"Трудозатраты на регистрацию (оценка агента): {effort}\n"
               f"Действия:\n{instructions}\n"
               f"Предложение: {item['url']}\nУсловия: {item.get('official_url') or 'первоисточник не найден'}\n"
-              f"Проверено: {item.get('verified_at') or 'не подтверждено'}\n"
-              f"/oh_save {item['id']} · /oh_hide {item['id']}\n"
-              f"/oh_details {item['id']} · /oh_recheck {item['id']} · /oh_instructions {item['id']}")
+              f"Проверено: {item.get('verified_at') or 'не подтверждено'}")
     return result[:4000]
 
 
@@ -135,8 +134,16 @@ class Runtime:
         if action == 'profile':
             return self.store.profile()
         if action == 'profile_propose':
-            proposal = self.store.propose_profile(args['patch'])
-            return {**proposal, 'instruction': 'Ask the owner to confirm with /oh_confirm ' + proposal['token']}
+            return self._offer(self.store.propose_profile(args['patch']))
+        if action == 'resume_profile':
+            return self.store.resume_profile()
+        if action == 'resume_propose':
+            return self._offer(self.store.propose_resume(args['ops']))
+        if action == 'profile_missing':
+            return self.store.profile_missing()
+        if action == 'rejected':
+            return [{'id': i['id'], 'title': i['title'], 'reasons': i['evaluation']['reasons']}
+                    for i in self.store.rejected(limit=min(int(args.get('limit', 10)), 30))]
         if action == 'sources':
             return self.store.sources()
         if action == 'source_add':
@@ -153,18 +160,105 @@ class Runtime:
             return self.notify(args.get('kind', 'new'), dry_run=bool(args.get('dry_run', False)))
         raise ValueError('Unknown or forbidden action')
 
+    def _send(self, text, markup=None):
+        """Trusted delivery to the owner only (fixed chat id from private config, never from content)."""
+        token, owner = self.secret_get('TELEGRAM_BOT_TOKEN'), self._owner()
+        if not token or not owner:
+            return False
+        payload = {'chat_id': owner, 'text': text, 'disable_web_page_preview': True}
+        if markup:
+            payload['reply_markup'] = markup
+        try:
+            return bool(self.telegram_transport(token, payload).get('ok'))
+        except Exception:
+            return False
+
+    def _offer(self, proposal):
+        """Send the owner the full diff with ✅/✖️ buttons. The model never receives the token."""
+        try:
+            text = buttons.format_proposal(proposal, self.store.resume_profile(redact=False))
+        except ValueError:
+            self.store.cancel_proposal(proposal['token'])
+            raise
+        sent = self._send(text, buttons.confirm_markup(proposal['token']))
+        return {'scope': proposal['scope'], 'confirmation_sent_to_owner': sent,
+                'instruction': ('The owner received the full change with ✅/✖️ buttons. Do not claim it is applied.'
+                                if sent else 'Delivery failed. Ask the owner to send /oh_pending to see and confirm it.')}
+
+    def pending(self):
+        """Re-send every pending proposal to the owner from the database (trusted path)."""
+        proposals = self.store.pending_proposals()
+        current = self.store.resume_profile(redact=False)
+        delivered = refused = 0
+        for proposal in proposals:
+            try:
+                text = buttons.format_proposal(proposal, current)
+            except ValueError:  # cannot be shown in full any more: cancel instead of cutting
+                self.store.cancel_proposal(proposal['token'])
+                refused += 1
+                continue
+            delivered += self._send(text, buttons.confirm_markup(proposal['token']))
+        if not proposals:
+            return 'Ожидающих правок профиля нет.'
+        note = f' Отменено как слишком большие: {refused}.' if refused else ''
+        return f'Ожидающих правок: {len(proposals)}, отправлено с кнопками: {delivered}.{note}'
+
+    def open_panel(self, data, fallback):
+        """Send a button panel as a NEW message at the bottom of the chat (trusted transport).
+
+        Further navigation edits that message in place; on delivery failure the text fallback is returned."""
+        screen = buttons.render(self, *buttons.parse(data))
+        if self._send(screen['text'], screen['markup']):
+            return 'Панель выше ⬆️'
+        return fallback() if callable(fallback) else fallback
+
+    def menu(self):
+        return self.open_panel(buttons.MENU_DATA, buttons.HELP)
+
+    def health_text(self):
+        health = self.handle({'action': 'health'})
+        lines = ['Opportunity Hunter работает.', f"Предложений: {health['items']}",
+                 f"Источников: {health['sources']}", f"Записей истории: {health['history']}",
+                 f"Отправлено уведомлений: {health['notification_states'].get('sent', 0)}",
+                 'Telegram: ' + ('настроен' if health['telegram_configured'] else 'не настроен'),
+                 f"Размер SQLite: {health['database_bytes'] // 1024} КБ"]
+        if health['latest_runs']:
+            latest = health['latest_runs'][0]
+            lines.append('Последняя проверка: ' + latest['category'] + ' · ' + latest['started_at'])
+        if health['latest_errors']:
+            lines.append('Есть неполные проверки источников. Данные без подтверждения не считаются подходящими.')
+        cron = self.home / 'cron/jobs.json'
+        if cron.is_file():
+            jobs = json.loads(cron.read_text())
+            jobs = jobs.get('jobs', []) if isinstance(jobs, dict) else jobs
+            lines.append(f"Расписание: {sum(j.get('state') == 'paused' and j.get('enabled') is False for j in jobs)} "
+                         f"из {len(jobs)} заданий PAUSED")
+        return '\n'.join(lines)
+
     def command(self, raw):
         self._trusted_human()
+        return self.run_command(raw)
+
+    def run_command(self, raw):
+        """Owner already verified: by session (command) or by the Telegram update (button press)."""
         parts = raw.strip().split()
-        if not parts:
-            return ('Opportunity Hunter: A — стипендии, B — вакансии, C — турниры, D — обучение.\n'
-                    'Пишите обычным языком. Команды: /oh_saved, /oh_list B, /oh_details ID, '
-                    '/oh_save ID, /oh_hide ID, /oh_recheck ID, /oh_profile, /oh_confirm TOKEN, '
-                    '/oh_category A off, /oh_frequency B 12, /oh_health.\n'
-                    'Подготовка и отправка заявок в MVP отсутствуют.')
+        if not parts or parts[0].lower() in ('menu', 'start'):
+            return self.menu()
         command = parts[0].lower()
+        if command == 'help':
+            return buttons.HELP
         if command == 'confirm' and len(parts) == 2:
-            return 'Профиль обновлён: ' + json.dumps(self.store.confirm_profile(parts[1]), ensure_ascii=False)
+            result = self.store.confirm_profile(parts[1])
+            return '✅ Применено: ' + ('резюме-профиль' if result['scope'] == 'resume' else 'критерии') + '. /oh_menu → 📋 Профиль.'
+        if command == 'pending':
+            return self.pending()
+        if command == 'cancel' and len(parts) == 2:
+            return '✖️ Правка отменена.' if self.store.cancel_proposal(parts[1]) else 'Предложение уже неактуально.'
+        panels = {'rejected': 'oh:l:r:0', 'recent': 'oh:l:n:0', 'categories': 'oh:m:cats', 'profile': 'oh:m:profile'}
+        if command == 'saved' and len(parts) == 1:
+            panels['saved'] = 'oh:l:s:0'
+        if command in panels:
+            return self.open_panel(panels[command], lambda: buttons.render(self, *buttons.parse(panels[command]))['text'])
         if command in ('save', 'unsave', 'hide', 'unhide') and len(parts) == 2:
             self.store.action(parts[1], command)
             return 'Готово: ' + command + ' #' + parts[1]
@@ -176,32 +270,14 @@ class Runtime:
         if command in ('saved', 'list'):
             items = self.store.list(category=parts[1].upper() if len(parts) == 2 else None,
                                     bookmarked=command == 'saved', limit=10)
-            return '\n\n'.join(f"#{i['id']} {i['title']}\n{i['url']}\n/oh_details {i['id']}" for i in items) or 'Пока нет сохранённых предложений.'
-        if command == 'profile':
-            return json.dumps(self.store.profile(), ensure_ascii=False, indent=2)
+            return '\n\n'.join(f"#{i['id']} {i['title']}\n{i['url']}" for i in items) or 'Пока нет сохранённых предложений.'
         if command == 'category' and len(parts) == 3 and parts[2] in ('on', 'off'):
             return json.dumps(self.store.preferences(parts[1].upper(), enabled=parts[2] == 'on'), ensure_ascii=False)
         if command == 'frequency' and len(parts) == 3:
             return json.dumps(self.store.preferences(parts[1].upper(), interval_hours=float(parts[2])), ensure_ascii=False)
         if command == 'health':
-            health=self.handle({'action':'health'})
-            lines=['Opportunity Hunter работает.',f"Предложений: {health['items']}",
-                   f"Источников: {health['sources']}",f"Записей истории: {health['history']}",
-                   f"Отправлено уведомлений: {health['notification_states'].get('sent',0)}",
-                   'Telegram: '+('настроен' if health['telegram_configured'] else 'не настроен'),
-                   f"Размер SQLite: {health['database_bytes']//1024} КБ"]
-            if health['latest_runs']:
-                latest=health['latest_runs'][0]
-                lines.append('Последняя проверка: '+latest['category']+' · '+latest['started_at'])
-            if health['latest_errors']:
-                lines.append('Есть неполные проверки источников. Данные без подтверждения не считаются подходящими.')
-            cron=self.home/'cron/jobs.json'
-            if cron.is_file():
-                jobs=json.loads(cron.read_text())
-                jobs=jobs.get('jobs',[]) if isinstance(jobs,dict) else jobs
-                lines.append(f"Расписание: {sum(j.get('state')=='paused' and j.get('enabled') is False for j in jobs)} из {len(jobs)} заданий PAUSED")
-            return '\n'.join(lines)
-        return 'Неизвестная команда. /oh — помощь. Или напишите запрос обычным языком.'
+            return self.health_text()
+        return 'Неизвестная команда. /oh_menu — меню с кнопками. Или напиши запрос обычным языком.'
 
     def notify(self, kind='new', dry_run=False):
         if kind not in ('new', 'urgent', 'digest'):
@@ -247,10 +323,8 @@ class Runtime:
             item = event['item']
             # Atomic claim BEFORE network I/O. A crash in 'sending' cannot cause blind resending.
             payload = {'chat_id': owner, 'text': ('СРОЧНО: близкий дедлайн\n' if kind == 'urgent' else '') + format_card(item),
-                       'disable_web_page_preview': True, 'reply_markup': {'keyboard': [
-                           [{'text': f"/oh_save {item['id']}"}, {'text': f"/oh_hide {item['id']}"}],
-                           [{'text': f"/oh_details {item['id']}"}, {'text': f"Повторно проверь предложение #{item['id']}"}]],
-                           'resize_keyboard': True, 'one_time_keyboard': True}}
+                       'disable_web_page_preview': True,
+                       'reply_markup': buttons.card_markup(item['id'], item.get('bookmarked'), item.get('hidden'))}
             try:
                 response = self.telegram_transport(token, payload)
                 if response.get('ok') and response.get('result', {}).get('message_id'):

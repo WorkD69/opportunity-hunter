@@ -75,6 +75,9 @@ def parse_env(pairs):
         key, sep, value = pair.partition('=')
         if not sep:
             raise SystemExit('--env expects KEY=VALUE')
+        if re.match(r'^[A-Za-z]:[\\/]', value):
+            # Git Bash rewrites "KEY=/opt/..." into a Windows path before Python sees it.
+            raise SystemExit(f'{key} looks like a local Windows path; in Git Bash run with MSYS_NO_PATHCONV=1')
         result[key] = value
     return result
 

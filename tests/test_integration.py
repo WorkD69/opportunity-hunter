@@ -70,5 +70,103 @@ class IntegrationTests(unittest.TestCase):
         self.assertNotIn('submit', actions)
 
 
+    def test_button_presses_are_handled_only_for_this_profiles_bot_and_owner(self):
+        import asyncio
+        build_profile(self.home)
+        secrets = {'TELEGRAM_BOT_TOKEN': '111:test-token', 'OH_OWNER_ID': '123'}
+        hc = types.ModuleType('hermes_constants')
+        hc.get_hermes_home = lambda: self.home
+        secret = types.ModuleType('agent.secret_scope')
+        secret.get_secret = secrets.get
+        session = types.ModuleType('gateway.session_context')
+        session.get_session_env = lambda name: None
+        captured = {}
+
+        class CallbackQueryHandler:
+            def __init__(self, callback, pattern=None):
+                self.callback, self.pattern = callback, pattern
+        ext = types.ModuleType('telegram.ext')
+        ext.CallbackQueryHandler = CallbackQueryHandler
+
+        class BadRequest(Exception):
+            pass
+        error = types.ModuleType('telegram.error')
+        error.BadRequest = BadRequest
+        telegram = types.ModuleType('telegram')
+        telegram.InlineKeyboardButton = lambda text, callback_data: (text, callback_data)
+        telegram.InlineKeyboardMarkup = lambda rows: rows
+
+        class Context:
+            profile_name = 'opportunity-hunter'
+            def register_tool(self, **kwargs): pass
+            def register_command(self, **kwargs): pass
+            def dispatch_tool(self, name, args): return '{}'
+            def register_telegram_handler(self, factory): captured['factory'] = factory
+
+        class Native:
+            def add_handler(self, handler): captured['handler'] = handler
+
+        sent, answers, edits = [], [], []
+        import contextlib
+        gateway_run = types.ModuleType('gateway.run')
+        gateway_run._profile_runtime_scope = lambda home: contextlib.nullcontext()
+
+        class Bot:
+            def __init__(self, bot_id): self.id = bot_id
+            async def send_message(self, **kwargs): sent.append(kwargs)
+
+        def press(data, user, chat, bot_id, edit_error=None):
+            async def answer(text=None, show_alert=False): answers.append((text, show_alert))
+            async def edit_message_text(text, reply_markup=None, **kwargs):
+                if edit_error:
+                    raise BadRequest(edit_error)
+                edits.append((text, reply_markup))
+            async def edit_message_reply_markup(reply_markup=None): edits.append((None, reply_markup))
+            query = types.SimpleNamespace(data=data, from_user=types.SimpleNamespace(id=user),
+                                          message=types.SimpleNamespace(chat=types.SimpleNamespace(id=chat)),
+                                          answer=answer, edit_message_text=edit_message_text,
+                                          edit_message_reply_markup=edit_message_reply_markup)
+            asyncio.run(captured['handler'].callback(types.SimpleNamespace(callback_query=query),
+                                                     types.SimpleNamespace(bot=Bot(bot_id))))
+
+        path = self.home / 'plugins/opportunity-hunter/__init__.py'
+        spec = importlib.util.spec_from_file_location('test_oh_plugin_buttons', path,
+                                                     submodule_search_locations=[str(path.parent)])
+        mod = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {'test_oh_plugin_buttons': mod, 'hermes_constants': hc, 'agent.secret_scope': secret,
+                                     'gateway.session_context': session, 'telegram': telegram, 'telegram.error': error,
+                                     'telegram.ext': ext, 'gateway.run': gateway_run}):
+            spec.loader.exec_module(mod)
+            mod.register(Context())
+            captured['factory'](Native(), None)
+            self.assertEqual(captured['handler'].pattern, r'^oh:')
+            press('oh:m:help', 123, 123, 222)      # another profile's bot: ignored entirely
+            press('oh:m:help', 999, 999, 111)      # a stranger on our bot: ignored
+            self.assertEqual((sent, answers, edits), ([], [], []))
+            press('oh:m:help', 123, 123, 111)      # the owner on our bot: the panel is edited in place
+            self.assertEqual(sent, [])
+            self.assertEqual(len(answers), 1)
+            text, keyboard = edits[-1]
+            self.assertIn('обычным текстом', text)
+            self.assertIn(('🏠 Меню', 'oh:m:menu'), keyboard[-1])
+            press('oh:m:health', 123, 123, 111, edit_error='Message is not modified')  # ignored quietly
+            self.assertEqual(sent, [])
+            press('oh:m:menu', 123, 123, 111, edit_error="Message can't be edited")    # falls back to a new panel
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0]['chat_id'], 123)
+            self.assertTrue(sent[0]['text'].startswith('🏠 Меню'))
+            press('oh:old:junk', 123, 123, 111)     # stale button: an alert instead of a spinner
+            self.assertEqual(answers[-1][1], True)
+            count = len(answers)
+
+            def broken_scope(home):
+                raise RuntimeError('scope failure')
+            gateway_run._profile_runtime_scope = broken_scope   # a failure before the owner check:
+            press('oh:m:help', 999, 999, 222)                   # a stranger gets nothing, not even a toast
+            self.assertEqual(len(answers), count)
+            del gateway_run._profile_runtime_scope     # profile scope API missing: buttons fail closed
+            press('oh:m:help', 123, 123, 111)
+            self.assertEqual((len(sent), len(answers)), (1, count))
+
 if __name__ == '__main__':
     unittest.main()

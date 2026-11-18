@@ -10,7 +10,12 @@ class RuntimeTests(unittest.TestCase):
         text=self.runtime.command('health')
         self.assertIn('Предложений:',text)
         self.assertNotIn('"items"',text)
-        self.assertIn('/oh_saved',self.runtime.command(''))
+        self.assertEqual(self.runtime.command(''),'Панель выше ⬆️')
+        self.assertIn('inline_keyboard',self.sent[-1]['reply_markup'])
+        self.assertTrue(self.sent[-1]['text'].startswith('🏠 Меню'))
+        self.assertEqual(self.runtime.command('saved'),'Панель выше ⬆️')   # lists open as panels, no /oh_details text
+        self.assertNotIn('/oh_details',self.sent[-1]['text'])
+        self.assertIn('обычным текстом',self.runtime.command('help'))
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -37,6 +42,13 @@ class RuntimeTests(unittest.TestCase):
 
     def test_profile_confirmation_only_trusted_owner_command(self):
         pending = self.runtime.handle({'action': 'profile_propose', 'patch': {'age': 20}})
+        # The model never sees the token; only the owner's message carries it inside the ✅ button.
+        self.assertTrue(pending['confirmation_sent_to_owner'])
+        self.assertNotIn('token', pending)
+        button = self.sent[-1]['reply_markup']['inline_keyboard'][0][0]['callback_data']
+        self.assertTrue(button.startswith('oh:c:'))
+        pending['token'] = button.split(':', 2)[2]
+        self.assertNotIn(pending['token'], repr({k: v for k, v in pending.items() if k != 'token'}))
         with self.assertRaises(ValueError):
             self.runtime.handle({'action': 'profile_confirm', 'token': pending['token']})
         self.session['HERMES_SESSION_USER_ID'] = '456'
@@ -57,7 +69,8 @@ class RuntimeTests(unittest.TestCase):
         self.runtime.notify('new')
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.sent[0]['chat_id'], '123')
-        self.assertIn('keyboard', self.sent[0]['reply_markup'])
+        buttons = self.sent[0]['reply_markup']['inline_keyboard']
+        self.assertTrue(all(b['callback_data'].startswith('oh:a:') for row in buttons for b in row))
         self.assertEqual(self.runtime.store.stats()['notification_states'], {'sent': 1})
 
     def test_digest_is_one_summary_not_a_burst_of_cards(self):
