@@ -98,7 +98,7 @@ class TransportTests(unittest.TestCase):
     def test_secret_in_stdin_only_and_stderr_not_logged(self):
         client=self.client
         output=SimpleNamespace(returncode=255,stdout='',stderr=TOKEN)
-        with patch.object(client,'ssh_args',return_value=['ssh','server']),patch.object(client,'expected_bot',return_value='example_test_bot'),patch.object(client,'log') as log,patch.object(client.subprocess,'run',return_value=output) as run:
+        with patch.object(client,'ssh_args',return_value=['ssh','server']),patch.object(client,'preflight',return_value=None),patch.object(client,'expected_bot',return_value='example_test_bot'),patch.object(client,'log') as log,patch.object(client.subprocess,'run',return_value=output) as run:
             value=client.request('',token=TOKEN)
         self.assertEqual(value['code'],'SSH_FAILED')
         self.assertNotIn(TOKEN,repr(run.call_args.args))
@@ -109,7 +109,7 @@ class TransportTests(unittest.TestCase):
     def test_success_requires_zero_exit_code(self):
         client=self.client
         output=SimpleNamespace(returncode=1,stdout='{"ok":true,"code":"TELEGRAM_CONFIGURED"}',stderr='')
-        with patch.object(client,'ssh_args',return_value=['ssh','server']),patch.object(client,'expected_bot',return_value='example_test_bot'),patch.object(client,'log'),patch.object(client.subprocess,'run',return_value=output):
+        with patch.object(client,'ssh_args',return_value=['ssh','server']),patch.object(client,'preflight',return_value=None),patch.object(client,'expected_bot',return_value='example_test_bot'),patch.object(client,'log'),patch.object(client.subprocess,'run',return_value=output):
             self.assertFalse(client.request(' --check')['ok'])
 
 class OAuthOutputTests(unittest.TestCase):

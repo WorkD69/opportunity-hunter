@@ -10,7 +10,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import ttk
-from vps import ssh_args, bot_username
+from vps import ssh_args, bot_username, preflight
 
 ROOT=Path(__file__).resolve().parent.parent
 LOG=ROOT/'reports/setup-events.jsonl'
@@ -36,6 +36,11 @@ def log(stage,code,exit_code=None):
 def request(flag='',token=None):
     assert flag in {'',' --finish',' --check'}
     log('ssh','BEGIN')
+    try:  # private connection check BEFORE the token is sent anywhere
+        preflight()
+    except SystemExit as exc:
+        log('ssh','PRIVATE_SSH_FAILED')
+        return {'ok':False,'code':'PRIVATE_SSH_FAILED','detail':str(exc)[:200]}
     try:
         result=subprocess.run(ssh_args()+['-T',COMMAND+' --bot-username '+expected_bot()+flag],input=(token+'\n') if token is not None else '',
             text=True,encoding='utf-8',capture_output=True,timeout=100,

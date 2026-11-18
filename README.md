@@ -24,12 +24,13 @@ python -m opportunity_hunter.cli health
 
 | Настройка | Назначение | Переменная на сервере |
 |---|---|---|
-| `$HermesServer`, `$HermesIdentityFile` | SSH-доступ (закреплённый ключ хоста) | — |
+| `$HermesPrivateServer`, `$HermesIdentityFile` | SSH-доступ **только по приватному адресу** (Tailscale / частная сеть); публичный адрес скрипты не используют и отклоняют | — |
+| `$HermesHostKeyAlias` | имя закреплённого ключа сервера в `known_hosts`, с которым сверяется приватный вход | — |
 | `$HermesHostRoot` | корень развёртывания Hermes на хосте | `OH_HOST_ROOT` |
 | `$OpportunityBotUsername` | ожидаемое имя Telegram-бота профиля | `OH_BOT_USERNAME` |
 | `$HermesProtectedService` | соседний сервис, который нельзя затрагивать | `OH_PROTECTED_SERVICE` |
 
-Каталог конкретного бэкапа передаётся явно: `--env OH_BACKUP_DIR=<путь>`. В Git Bash на Windows запускайте такие команды с `MSYS_NO_PATHCONV=1`, иначе оболочка подменит серверный путь локальным (`vps.py` такое значение отклонит).
+Перед любой операцией скрипты один раз проверяют приватное подключение (`python scripts/vps.py --check`) и при ошибке останавливаются с указанием стадии (network / login / host key), без повторов. Каталог конкретного бэкапа передаётся явно: `--env OH_BACKUP_DIR=<путь>`. В Git Bash на Windows запускайте такие команды с `MSYS_NO_PATHCONV=1`, иначе оболочка подменит серверный путь локальным (`vps.py` такое значение отклонит).
 
 ## Telegram после подключения
 
