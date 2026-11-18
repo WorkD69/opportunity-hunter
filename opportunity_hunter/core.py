@@ -240,6 +240,56 @@ def _location_verdict(item, profile):
     return False, True, ['Другой город: удалённый формат или помощь с переездом не подтверждены'], []
 
 
+# Country names written by the model or sources compare as ISO codes («РФ» == «Россия» == «RU»).
+COUNTRY_ALIASES = {'ru': 'RU', 'rus': 'RU', 'рф': 'RU', 'россия': 'RU', 'российская федерация': 'RU',
+                   'russia': 'RU', 'russian federation': 'RU', 'гражданин рф': 'RU', 'гражданство рф': 'RU'}
+_CEFR = ('a1', 'a2', 'b1', 'b2', 'c1', 'c2')
+_CEFR_WORDS = {'beginner': 'a1', 'elementary': 'a2', 'pre-intermediate': 'a2', 'pre intermediate': 'a2',
+               'intermediate': 'b1', 'upper-intermediate': 'b2', 'upper intermediate': 'b2',
+               'advanced': 'c1', 'fluent': 'c1', 'proficient': 'c2', 'native': 'c2'}
+# Criteria that may only lower confidence, never reject (the owner: GPA changes over time).
+SOFT_CRITERIA = ('gpa',)
+
+
+def normalize_country(value):
+    if isinstance(value, list):
+        return [normalize_country(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    text = ' '.join(value.casefold().replace('ё', 'е').replace('.', ' ').split())
+    return COUNTRY_ALIASES.get(text, text.upper() if len(text) == 2 else text)
+
+
+def cefr_range(value):
+    """(low, high) CEFR indexes from 'B1–B2', 'B2+', 'Upper-Intermediate', ['B2','C1'] …; None if unknown."""
+    values = value if isinstance(value, list) else [value]
+    found = []
+    for raw in values:
+        if not isinstance(raw, str):
+            return None
+        # Cyrillic look-alikes (В2, С1) are common in Russian texts.
+        text = raw.casefold().translate(str.maketrans({'а': 'a', 'в': 'b', 'с': 'c'}))
+        levels = re.findall(r'(?<![a-z])([abc][12])(?![0-9])', text)
+        if not levels:
+            levels = [level for word, level in sorted(_CEFR_WORDS.items(), key=lambda kv: -len(kv[0])) if word in text][:1]
+        found += [_CEFR.index(level) for level in levels]
+    return (min(found), max(found)) if found else None
+
+
+def _english_verdict(operator, expected, actual):
+    """'match' | 'borderline' | 'mismatch' | None (cannot compare). A range profile (B1–B2) is borderline
+    against a requirement inside the range instead of a hard reject."""
+    have, need = cefr_range(actual), cefr_range(expected)
+    if have is None or need is None:
+        return None
+    if operator == 'max':
+        return 'match' if have[1] <= need[1] else 'borderline' if have[0] <= need[1] else 'mismatch'
+    required = need[0]  # eq / in / min: the lowest accepted level
+    if have[0] >= required:
+        return 'match'
+    return 'borderline' if have[1] >= required else 'mismatch'
+
+
 def evaluate(item, profile, today=None):
     """Assess observed constraints; rank is utility, never selection probability."""
     now = _datetime(today) if today is not None else _now()
@@ -276,6 +326,23 @@ def evaluate(item, profile, today=None):
             uncertain = True
             reasons.append(f'{field}: user confirmation needed')
             continue
+        if field in ('citizenship', 'residence'):
+            actual, expected = normalize_country(actual), normalize_country(expected)
+        if field == 'gpa' and type(actual) in (int, float) and type(expected) in (int, float) \
+                and (actual <= 5) != (expected <= 5):
+            uncertain = True  # 10-point profile vs 5-point threshold (or vice versa): not comparable
+            reasons.append('gpa: threshold uses a different grading scale')
+            continue
+        if field == 'english_level':
+            verdict = _english_verdict(operator, expected, actual)
+            if verdict == 'match':
+                continue
+            uncertain = True if verdict in ('borderline', None) else uncertain
+            mismatch = mismatch or verdict == 'mismatch'
+            reasons.append({'borderline': 'english_level: profile range is on the border of the requirement',
+                            None: 'english_level: criterion cannot be compared reliably',
+                            'mismatch': 'english_level: confirmed profile does not meet criterion'}[verdict])
+            continue
         try:
             if operator == 'eq':
                 matched = actual == expected
@@ -291,7 +358,10 @@ def evaluate(item, profile, today=None):
             uncertain = True
             reasons.append(f'{field}: criterion cannot be compared reliably')
             continue
-        if not matched:
+        if not matched and field in SOFT_CRITERIA:
+            uncertain = True
+            reasons.append(f'{field}: below the stated threshold (soft criterion, the owner decides)')
+        elif not matched:
             mismatch = True
             reasons.append(f'{field}: confirmed profile does not meet criterion')
     costs = item.get('cost_flags') or {}

@@ -486,5 +486,37 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(self.store.is_due('A', now=now + timedelta(hours=5)))
 
 
+class CriteriaComparisonTests(unittest.TestCase):
+    """Free-text values from sources must not cause false rejections."""
+    OWNER = {**PROFILE_SEED, 'year': 3, 'citizenship': 'RU', 'english_level': 'B1–B2', 'gpa': 7.5}
+
+    @staticmethod
+    def verdict(field, operator, value, profile=None):
+        item = opportunity(requirements=[{'field': field, 'operator': operator, 'value': value,
+                                          'evidence_url': 'https://example.org/program', 'quote': 'Official rule.'}])
+        return evaluate(item, profile or CriteriaComparisonTests.OWNER)['eligibility']
+
+    def test_citizenship_spellings_compare_as_one_country(self):
+        for value in ('РФ', 'Россия', 'Russian Federation', 'ru', ['Россия', 'Беларусь']):
+            self.assertEqual(self.verdict('citizenship', 'in' if isinstance(value, list) else 'eq', value), 'eligible', value)
+        self.assertEqual(self.verdict('citizenship', 'eq', 'Казахстан'), 'ineligible')
+        self.assertEqual(self.verdict('citizenship', 'eq', 'RU', {**self.OWNER, 'citizenship': 'Россия'}), 'eligible')
+
+    def test_english_uses_cefr_order_and_a_range_is_borderline_not_rejected(self):
+        self.assertEqual(self.verdict('english_level', 'min', 'B1'), 'eligible')
+        self.assertEqual(self.verdict('english_level', 'min', 'Intermediate'), 'eligible')
+        self.assertEqual(self.verdict('english_level', 'min', 'B2'), 'needs_clarification')
+        self.assertEqual(self.verdict('english_level', 'min', 'Upper-Intermediate'), 'needs_clarification')
+        self.assertEqual(self.verdict('english_level', 'min', 'С1'), 'ineligible')  # Cyrillic С
+        self.assertEqual(self.verdict('english_level', 'eq', 'fluent'), 'ineligible')
+        self.assertEqual(self.verdict('english_level', 'min', 'good English'), 'needs_clarification')
+
+    def test_gpa_is_soft_and_scale_aware(self):
+        self.assertEqual(self.verdict('gpa', 'min', 8), 'needs_clarification')    # below: never a reject
+        self.assertEqual(self.verdict('gpa', 'min', 4.5), 'needs_clarification')  # 5-point scale: not comparable
+        self.assertEqual(self.verdict('gpa', 'min', 6.5), 'eligible')
+        self.assertEqual(self.verdict('year', 'min', 4), 'ineligible')            # hard criteria stay hard
+
+
 if __name__ == '__main__':
     unittest.main()
