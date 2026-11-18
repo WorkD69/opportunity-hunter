@@ -355,17 +355,22 @@ class CoreTests(unittest.TestCase):
         self.assertIsInstance(result['evaluation']['rank'], (float, int))
         self.assertIn('utility', result['evaluation']['rank_description'])
 
-    def test_d_requires_free_program_and_b_requires_paid_employment(self):
+    def test_d_requires_free_program_and_b_pay_only_affects_rank(self):
         paid_course = opportunity(category='D')
         paid_course['cost_flags']['paid_subscription'] = True
         self.assertEqual(evaluate(paid_course, self.store.profile())['eligibility'], 'ineligible')
         unknown_course = opportunity(category='D', cost_flags={})
         self.assertEqual(evaluate(unknown_course, self.store.profile())['eligibility'], 'needs_clarification')
-        career = self.store.upsert(opportunity(category='B', reward={'type': 'career', 'amount': None}))
-        self.assertEqual(career['evaluation']['eligibility'], 'needs_clarification')
-        self.assertNotIn(career['id'], [i['id'] for i in self.store.notification_candidates()])
-        unpaid = opportunity(category='B', reward={'type': 'salary', 'amount': 'unpaid'})
-        self.assertEqual(evaluate(unpaid, self.store.profile())['eligibility'], 'ineligible')
+        profile = {**self.store.profile(), 'year': 3}
+        paid = evaluate(opportunity(category='B', reward={'type': 'salary', 'amount': None}), profile)
+        unstated = evaluate(opportunity(category='B', reward={'type': 'career', 'amount': None}), profile)
+        unpaid = evaluate(opportunity(category='B', reward={'type': 'salary', 'amount': 'unpaid'}), profile)
+        for result in (paid, unstated, unpaid):  # the owner wants unpaid / unstated internships too
+            self.assertEqual(result['eligibility'], 'eligible')
+        self.assertIn('pay_unknown', unstated['flags'])
+        self.assertIn('unpaid', unpaid['flags'])
+        self.assertGreater(paid['rank'], unstated['rank'])
+        self.assertGreater(paid['rank'], unpaid['rank'])
 
     def test_uncited_mismatch_cannot_reject_user(self):
         item = opportunity(requirements=[{'field': 'year', 'operator': 'max', 'value': 1}])

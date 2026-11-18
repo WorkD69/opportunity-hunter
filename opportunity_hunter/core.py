@@ -386,15 +386,19 @@ def evaluate(item, profile, today=None):
         elif free_status != 'free':
             uncertain = True
             reasons.append('Participation costs require official confirmation')
+    paid = False
     if item.get('category') == 'B':
+        # The owner wants unpaid and pay-unstated internships too: pay only affects ranking, never eligibility.
         reward = item.get('reward') or {}
-        if reward.get('type') != 'salary':
-            uncertain = True
-            reasons.append('Paid employment or internship has not been established')
         amount = reward.get('amount')
         if isinstance(amount, str) and re.search(r'\bunpaid\b|без оплат|неоплач|^\s*0(?:[.,]0+)?\s*(?:руб|₽|RUB|USD|EUR|\$|€)?\s*$', amount, re.I):
-            mismatch = True
-            reasons.append('Role is explicitly unpaid')
+            flags.append('unpaid')
+            reasons.append('Unpaid role (shown by owner preference)')
+        elif reward.get('type') == 'salary':
+            paid = True
+        else:
+            flags.append('pay_unknown')
+            reasons.append('Pay is not stated')
     if status == 'unknown':
         uncertain = True
         reasons.append('Application availability is unverified')
@@ -407,6 +411,7 @@ def evaluate(item, profile, today=None):
     rank = (50 if eligibility == 'eligible' else 20 if eligibility == 'needs_clarification' else 0)
     rank += 20 if supported else 0
     rank += 10 if free_status == 'free' else 0
+    rank += 8 if paid else 0
     rank += {'A': 6, 'B': 10, 'C': 4, 'D': 0}.get(item.get('category'), 0)
     assessment = item.get('assessment') or {}
     for field, preferred, weight in [('benefit', 'high', 8), ('registration_effort', 'low', 6),

@@ -7,7 +7,7 @@ description: Use when the owner requests scholarships, grants, jobs, internships
 
 Use the `opportunity_hunter` tool. It wraps Hermes's existing web_search/web_extract, enforces budgets, keeps a source registry and SQLite history. It does not apply to anything.
 
-Categories: A personal scholarships, cash prizes and targeted project grants (including AI/IT hackathons); B paid junior/trainee/student jobs and internships in finance/crypto/quant AND Python/AI/data; C free simulated/paper/algorithm trading contests; D free practical educational/career/mentoring/research programs. B is a major priority. Search beyond named firms and sites, in RU and EN.
+Categories: A personal scholarships, cash prizes and targeted project grants (including AI/IT hackathons); B junior/trainee/student jobs and internships (paid preferred, but unpaid or pay-unstated ones are also wanted) in finance/crypto/quant AND Python/AI/data; C free simulated/paper/algorithm trading contests; D free practical educational/career/mentoring/research programs. B is a major priority. Search beyond named firms and sites, in RU and EN.
 
 ## Research workflow
 
