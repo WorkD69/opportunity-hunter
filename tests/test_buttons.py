@@ -342,6 +342,29 @@ class ButtonTests(unittest.TestCase):
         self.assertIn('отправлено с кнопками: 1', text)
         self.assertIn('слишком большие: 1', text)
 
+    def test_reimport_keeps_facts_confirmed_in_the_bot_unless_their_content_changed(self):
+        master = {'resume_profile': {'projects': [{'id': 'prj-a', 'name': 'Project A', 'result': 'shipped'},
+                                                  {'id': 'prj-b', 'name': 'Project B'}]}}
+        self.runtime.store.import_master(master, apply=True)
+        for entry_id in ('prj-a', 'prj-b'):
+            self.press(next(c for c in self.callbacks(self.press(f'oh:re:p:{entry_id}')) if c.startswith('oh:rc:')))
+        changed = {'resume_profile': {'projects': [{'id': 'prj-a', 'name': 'Project A', 'result': 'shipped'},
+                                                   {'id': 'prj-b', 'name': 'Project B', 'result': 'new claim'}]}}
+        self.runtime.store.import_master(changed, apply=True)
+        projects = {e['id']: e for e in self.runtime.store.resume_profile(redact=False)['projects']}
+        self.assertTrue(projects['prj-a']['confirmed'])    # same content: the owner's confirmation survives
+        self.assertFalse(projects['prj-b']['confirmed'])   # content changed: must be reviewed again
+
+    def test_unpaid_and_pay_unstated_internships_are_notified(self):
+        self.runtime.store.import_master({'criteria': {'year': 3}}, apply=True)
+        for n, reward in enumerate(({'type': 'career', 'amount': None}, {'type': 'salary', 'amount': 'unpaid'})):
+            self.runtime.store.upsert({
+                'title': f'Internship {n}', 'category': 'B', 'organizer': 'Employer', 'status': 'active',
+                'url': f'https://employer.example/i/{n}', 'official_url': f'https://employer.example/i/{n}',
+                'reward': reward, 'evidence': [{'url': f'https://employer.example/i/{n}', 'quote': 'Internship'}]})
+        titles = {i['title'] for i in self.runtime.store.notification_candidates()}
+        self.assertTrue({'Internship 0', 'Internship 1'} <= titles)
+
     def test_model_cannot_confirm_resume_facts(self):
         source = (Path(__file__).resolve().parents[1] / 'opportunity_hunter/assets/plugin/__init__.py').read_text(encoding='utf-8')
         self.assertNotIn('confirm_resume_entry', source)

@@ -819,6 +819,15 @@ class Store:
         if criteria:
             self._validate_profile_patch(criteria)
         resume = validate_resume(master['resume_profile']) if master.get('resume_profile') is not None else None
+        if resume is not None:
+            # Keep confirmations the owner made in the bot: an entry whose content is unchanged
+            # (same digest) stays confirmed even if the local file still says confirmed=false.
+            current = self.resume_profile(redact=False)
+            for section in RESUME_SECTIONS:
+                confirmed_here = {e['id']: resume_entry_digest(e) for e in current.get(section) or [] if e.get('confirmed')}
+                for entry in resume[section]:
+                    if not entry.get('confirmed') and confirmed_here.get(entry['id']) == resume_entry_digest(entry):
+                        entry['confirmed'] = True
         sources = master.get('extra_sources') or []
         if not isinstance(sources, list) or len(sources) > 50:
             raise ValueError('extra_sources must be a short list')
@@ -1203,8 +1212,7 @@ class Store:
                 continue
             if item['category'] in ('C', 'D') and evaluation['free_status'] != 'free':
                 continue
-            if item['category'] == 'B' and item.get('reward', {}).get('type') != 'salary':
-                continue
+            # B: unpaid and pay-unstated internships are wanted too (owner); pay only affects ranking.
             if kind == 'digest':
                 day_start = datetime.combine(instant.astimezone(MSK).date(), time.min, MSK).astimezone(UTC)
                 with self._db() as db:
