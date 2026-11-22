@@ -227,13 +227,32 @@ class Runtime:
             lines.append('Последняя проверка: ' + latest['category'] + ' · ' + latest['started_at'])
         if health['latest_errors']:
             lines.append('Есть неполные проверки источников. Данные без подтверждения не считаются подходящими.')
-        cron = self.home / 'cron/jobs.json'
-        if cron.is_file():
-            jobs = json.loads(cron.read_text())
-            jobs = jobs.get('jobs', []) if isinstance(jobs, dict) else jobs
-            lines.append(f"Расписание: {sum(j.get('state') == 'paused' and j.get('enabled') is False for j in jobs)} "
-                         f"из {len(jobs)} заданий PAUSED")
+        lines += self.cron_lines()
         return '\n'.join(lines)
+
+    def cron_lines(self):
+        """Per-job state of this profile's native Cron: is it firing and how did the last run end."""
+        cron = self.home / 'cron/jobs.json'
+        if not cron.is_file():
+            return ['Расписание: заданий нет (cron/jobs.json не найден)']
+        try:
+            jobs = json.loads(cron.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as error:
+            return [f'Расписание: не удалось прочитать cron/jobs.json ({type(error).__name__})']
+        jobs = jobs.get('jobs', []) if isinstance(jobs, dict) else jobs
+        paused = sum(j.get('state') == 'paused' or j.get('enabled') is False for j in jobs)
+        lines = [f'Расписание: {len(jobs)} заданий, на паузе {paused}']
+        for job in jobs:
+            line = f"• {job.get('name', '?')}: последний {job.get('last_run_at') or 'не запускалось'}"
+            if job.get('last_status'):
+                line += f" · {job['last_status']}"
+            if job.get('failure_streak'):
+                line += f" · сбоев подряд {job['failure_streak']}"
+            line += f" · следующий {job.get('next_run_at') or '—'}"
+            if job.get('last_error'):
+                line += '\n  ошибка: ' + ' '.join(str(job['last_error']).split())[:200]
+            lines.append(line)
+        return lines
 
     def command(self, raw):
         self._trusted_human()

@@ -17,6 +17,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn('/oh_details',self.sent[-1]['text'])
         self.assertIn('обычным текстом',self.runtime.command('help'))
 
+    def test_health_shows_last_cron_run_status_and_error_per_job(self):
+        import json
+        (self.home / 'cron').mkdir(parents=True, exist_ok=True)
+        (self.home / 'cron/jobs.json').write_text(json.dumps({'jobs': [
+            {'name': 'oh-scan-B', 'enabled': True, 'state': 'scheduled', 'last_run_at': '2026-11-22T20:20:00+03:00',
+             'last_status': 'error', 'failure_streak': 3, 'next_run_at': '2026-11-23T08:20:00+03:00',
+             'last_error': 'Tool opportunity_hunter\n not available'},
+            {'name': 'oh-daily', 'enabled': False, 'state': 'paused'}]}), encoding='utf-8')
+        text = self.runtime.health_text()
+        self.assertIn('Расписание: 2 заданий, на паузе 1', text)
+        self.assertIn('oh-scan-B: последний 2026-11-22T20:20:00+03:00 · error · сбоев подряд 3', text)
+        self.assertIn('ошибка: Tool opportunity_hunter not available', text)
+        self.assertIn('oh-daily: последний не запускалось', text)
+
+    def test_health_reports_unreadable_cron_file_instead_of_failing(self):
+        (self.home / 'cron').mkdir(parents=True, exist_ok=True)
+        (self.home / 'cron/jobs.json').write_text('{broken', encoding='utf-8')
+        self.assertIn('не удалось прочитать cron/jobs.json', self.runtime.health_text())
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
