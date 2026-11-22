@@ -15,3 +15,5 @@ reports/*.jsonl
 
 # Local plans and scratch files contain personal data
 tmp/
+.env*
+.worktrees/
