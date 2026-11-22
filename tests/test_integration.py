@@ -29,6 +29,30 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             build_profile(self.home)
 
+    def test_plugin_reload_picks_up_changed_submodules(self):
+        build_profile(self.home)
+        stubs = {'hermes_constants': types.ModuleType('hermes_constants'),
+                 'agent.secret_scope': types.ModuleType('agent.secret_scope'),
+                 'gateway.session_context': types.ModuleType('gateway.session_context')}
+        path = self.home / 'plugins/opportunity-hunter/__init__.py'
+        runtime_file = path.parent / 'opportunity_hunter/runtime.py'
+
+        def load():
+            spec = importlib.util.spec_from_file_location('test_oh_reload', path,
+                                                         submodule_search_locations=[str(path.parent)])
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules['test_oh_reload'] = mod
+            spec.loader.exec_module(mod)
+            return mod
+
+        with patch.dict(sys.modules, stubs):
+            self.assertFalse(hasattr(load().Runtime, 'DEPLOY_MARKER'))
+            runtime_file.write_text(runtime_file.read_text(encoding='utf-8')
+                                    + '\nRuntime.DEPLOY_MARKER = 2\n', encoding='utf-8')
+            self.assertEqual(load().Runtime.DEPLOY_MARKER, 2)   # hot reload, not the cached old module
+            for name in [n for n in sys.modules if n.startswith('test_oh_reload')]:
+                del sys.modules[name]
+
     def test_packaged_plugin_registers_profile_scoped_tool_and_trusted_command(self):
         build_profile(self.home)
         hc = types.ModuleType('hermes_constants')

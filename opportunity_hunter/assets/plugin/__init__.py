@@ -1,7 +1,13 @@
 """Native Hermes plugin: loaded only from the Opportunity Hunter profile."""
 import json
 import logging
+import sys
 from pathlib import Path
+
+# A hot plugin reload re-executes only this file; drop our cached submodules so a deploy takes effect
+# without a Gateway restart (otherwise the old runtime/core keep running from sys.modules).
+for _name in [n for n in sys.modules if n.startswith(__name__ + '.opportunity_hunter')]:
+    del sys.modules[_name]
 
 from .opportunity_hunter import buttons
 from .opportunity_hunter.runtime import Runtime
